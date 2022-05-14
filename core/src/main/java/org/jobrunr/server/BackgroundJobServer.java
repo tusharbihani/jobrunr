@@ -251,9 +251,9 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         zookeeperThreadPool = new ScheduledThreadPoolJobRunrExecutor(2, "backgroundjob-zookeeper-pool");
         // why fixedDelay: in case of long stop-the-world garbage collections, the zookeeper tasks will queue up
         // and all will be launched one after another
-        zookeeperThreadPool.scheduleWithFixedDelay(serverZooKeeper, 0, configuration.pollIntervalInSeconds, TimeUnit.SECONDS);
-        zookeeperThreadPool.scheduleWithFixedDelay(jobZooKeeper, 1, configuration.pollIntervalInSeconds, TimeUnit.SECONDS);
-        zookeeperThreadPool.scheduleWithFixedDelay(new CheckForNewJobRunrVersion(this), 1, 8, TimeUnit.HOURS);
+        zookeeperThreadPool.scheduleAtFixedRate(serverZooKeeper, 0, configuration.pollIntervalInSeconds, TimeUnit.SECONDS);
+        zookeeperThreadPool.scheduleAtFixedRate(jobZooKeeper, 1, configuration.pollIntervalInSeconds, TimeUnit.SECONDS);
+        zookeeperThreadPool.scheduleAtFixedRate(new CheckForNewJobRunrVersion(this), 1, 8, TimeUnit.HOURS);
     }
 
     private void stopZooKeepers() {

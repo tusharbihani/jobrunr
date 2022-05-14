@@ -54,6 +54,8 @@ public class JobZooKeeper implements Runnable {
     private final AtomicInteger occupiedWorkers;
     private final Duration durationPollIntervalTimeBox;
     private Instant runStartTime;
+    private Instant firstRunStartTime;
+    private long runCounter;
 
     public JobZooKeeper(BackgroundJobServer backgroundJobServer) {
         this.backgroundJobServer = backgroundJobServer;
@@ -73,7 +75,12 @@ public class JobZooKeeper implements Runnable {
     @Override
     public void run() {
         try {
+            if(firstRunStartTime == null) firstRunStartTime = Instant.now();
             runStartTime = Instant.now();
+            Instant calculatedIdealNow = firstRunStartTime.plus(Duration.ofSeconds(runCounter * backgroundJobServerStatus().getPollIntervalInSeconds()));
+            LOGGER.info("TimeDrift: runCounter: {}, runStartTime: {}, idealRunStartTime: {}, drift: {}", runCounter, runStartTime, calculatedIdealNow, Duration.between(runStartTime, calculatedIdealNow).toMillis());
+            runCounter++;
+
             if (backgroundJobServer.isUnAnnounced()) return;
 
             updateJobsThatAreBeingProcessed();
@@ -185,9 +192,12 @@ public class JobZooKeeper implements Runnable {
     }
 
     boolean mustSchedule(RecurringJob recurringJob) {
-        return recurringJob.getNextRun().isBefore(now().plus(durationPollIntervalTimeBox).plusSeconds(1))
-                && !storageProvider.recurringJobExists(recurringJob.getId(), StateName.SCHEDULED, StateName.ENQUEUED, StateName.PROCESSING);
-
+        LOGGER.debug("mustSchedule {}", recurringJob);
+        boolean condition1 = recurringJob.getNextRun().isBefore(now().plus(durationPollIntervalTimeBox).plusSeconds(1));
+        boolean condition2 = !storageProvider.recurringJobExists(recurringJob.getId(), StateName.SCHEDULED, StateName.ENQUEUED, StateName.PROCESSING);
+        boolean flag = condition1 && condition2;
+        LOGGER.debug("condition1 {} condition2 {}", condition1, condition2);
+        return flag;
     }
 
     void processJobList(Supplier<List<Job>> jobListSupplier, Consumer<Job> jobConsumer) {
