@@ -12,7 +12,7 @@ public class ScheduledThreadPoolJobRunrExecutor extends java.util.concurrent.Sch
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ScheduledThreadPoolJobRunrExecutor.class);
 
-    private AntiDriftScheduler antiDriftScheduler;
+    private final AntiDriftScheduler antiDriftScheduler;
 
     public ScheduledThreadPoolJobRunrExecutor(int corePoolSize, String threadNamePrefix) {
         super(corePoolSize + 1, new NamedThreadFactory(threadNamePrefix));
