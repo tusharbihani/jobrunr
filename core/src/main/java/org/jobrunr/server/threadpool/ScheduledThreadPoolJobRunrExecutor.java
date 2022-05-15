@@ -5,11 +5,8 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 public class ScheduledThreadPoolJobRunrExecutor extends java.util.concurrent.ScheduledThreadPoolExecutor implements JobRunrExecutor {
 
@@ -19,10 +16,18 @@ public class ScheduledThreadPoolJobRunrExecutor extends java.util.concurrent.Sch
 
     public ScheduledThreadPoolJobRunrExecutor(int corePoolSize, String threadNamePrefix) {
         super(corePoolSize + 1, new NamedThreadFactory(threadNamePrefix));
-        setMaximumPoolSize(corePoolSize * 2);
+        setMaximumPoolSize(corePoolSize * 2 + 2);
         setKeepAliveTime(1, TimeUnit.MINUTES);
-        antiDriftScheduler = new AntiDriftScheduler(this, Arrays.asList(new AntiDriftSchedule(Duration.ofMinutes(1), new TestClass())));
-        scheduleAtFixedRate(antiDriftScheduler, 0, 250, TimeUnit.MILLISECONDS);
+        antiDriftScheduler = new AntiDriftScheduler(this);
+        super.scheduleAtFixedRate(antiDriftScheduler, 0, 250, TimeUnit.MILLISECONDS);
+    }
+
+    public void scheduleAtFixedRate(Runnable command, Duration initialDelay, Duration period) {
+        this.antiDriftScheduler.addSchedule(new AntiDriftSchedule(command, initialDelay, period));
+    }
+
+    public ScheduledFuture<?> schedule(Runnable command, Duration delay) {
+        return this.schedule(command, delay.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -72,16 +77,20 @@ public class ScheduledThreadPoolJobRunrExecutor extends java.util.concurrent.Sch
         private final ScheduledThreadPoolJobRunrExecutor executor;
         private final List<AntiDriftSchedule> antiDriftSchedules;
 
-        public AntiDriftScheduler(ScheduledThreadPoolJobRunrExecutor executor, List<AntiDriftSchedule> antiDriftSchedules) {
+        public AntiDriftScheduler(ScheduledThreadPoolJobRunrExecutor executor) {
             this.executor = executor;
-            this.antiDriftSchedules = antiDriftSchedules;
+            this.antiDriftSchedules = new CopyOnWriteArrayList<>();
+        }
+
+        public void addSchedule(AntiDriftSchedule antiDriftSchedule) {
+            this.antiDriftSchedules.add(antiDriftSchedule);
         }
 
         @Override
         public void run() {
             Instant now = Instant.now();
             antiDriftSchedules.stream()
-                    .filter(antiDriftSchedule -> antiDriftSchedule.scheduledAt.isBefore(now))
+                    .filter(antiDriftSchedule -> antiDriftSchedule.getScheduledAt().isBefore(now))
                     .forEach(this::schedule);
         }
 
@@ -89,44 +98,35 @@ public class ScheduledThreadPoolJobRunrExecutor extends java.util.concurrent.Sch
             Instant now = Instant.now();
             Instant nextSchedule = antiDriftSchedule.getNextSchedule();
             Duration duration = Duration.between(now, nextSchedule);
-            executor.schedule(antiDriftSchedule.runnable, duration.toMillis(), TimeUnit.MILLISECONDS);
+            executor.schedule(antiDriftSchedule.runnable, duration);
         }
     }
 
     private static class AntiDriftSchedule {
+        private final Duration initialDelay;
         private final Duration duration;
         private final Runnable runnable;
         private final Instant firstScheduledAt;
         private long scheduleCount;
         private Instant scheduledAt;
 
-        public AntiDriftSchedule(Duration duration, Runnable runnable) {
-            this.duration = duration;
+        public AntiDriftSchedule(Runnable runnable, Duration initialDelay, Duration duration) {
             this.runnable = runnable;
-            this.firstScheduledAt = Instant.now();
+            this.initialDelay = initialDelay;
+            this.duration = duration;
             this.scheduleCount = 0;
-            this.scheduledAt = Instant.now();
+            this.firstScheduledAt = Instant.now().plus(initialDelay);
+            this.scheduledAt = firstScheduledAt;
+        }
+
+        public Instant getScheduledAt() {
+            return this.scheduledAt;
         }
 
         public Instant getNextSchedule() {
             this.scheduledAt = firstScheduledAt.plus(duration.multipliedBy(scheduleCount));
             scheduleCount++;
             return scheduledAt;
-        }
-
-    }
-
-    private static class TestClass implements Runnable {
-
-        private Instant firstRun;
-        private long  runCounter;
-
-        @Override
-        public void run() {
-            if(firstRun == null) firstRun = Instant.now();
-            Instant expectedRunInstant = firstRun.plus(Duration.ofMinutes(1).multipliedBy(runCounter));
-            LOGGER.info("AntiDriftScheduler started at {}; now is {}; drift: {}", firstRun, Instant.now(), Duration.between(Instant.now(), expectedRunInstant).toMillis());
-            runCounter++;
         }
     }
 }
