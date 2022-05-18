@@ -9,6 +9,7 @@ import org.jobrunr.jobs.states.StateName;
 import org.jobrunr.server.concurrent.ConcurrentJobModificationResolver;
 import org.jobrunr.server.concurrent.UnresolvableConcurrentJobModificationException;
 import org.jobrunr.server.dashboard.DashboardNotificationManager;
+import org.jobrunr.server.dashboard.PollIntervalInSecondsTimeBoxIsTooSmallNotification;
 import org.jobrunr.server.strategy.WorkDistributionStrategy;
 import org.jobrunr.storage.BackgroundJobServerStatus;
 import org.jobrunr.storage.ConcurrentJobModificationException;
@@ -86,6 +87,7 @@ public class JobZooKeeper implements Runnable {
             updateJobsThatAreBeingProcessed();
             runMasterTasksIfCurrentServerIsMaster();
             onboardNewWorkIfPossible();
+            showWarningIfPollIntervalInSecondsTimeBoxIsPassed();
         } catch (Exception e) {
             dashboardNotificationManager.handle(e);
             if (exceptionCount.getAndIncrement() < 5) {
@@ -160,6 +162,14 @@ public class JobZooKeeper implements Runnable {
         if (pollIntervalInSecondsTimeBoxIsAboutToPass()) return;
         if (canOnboardNewWork()) {
             checkForEnqueuedJobs();
+        }
+    }
+
+    private void showWarningIfPollIntervalInSecondsTimeBoxIsPassed() {
+        final Duration durationRunTime = Duration.between(runStartTime, now());
+        final boolean runTimeBoxIsPassed = durationRunTime.compareTo(durationPollIntervalTimeBox) >= 0;
+        if(runTimeBoxIsPassed) {
+            dashboardNotificationManager.notify(new PollIntervalInSecondsTimeBoxIsTooSmallNotification(durationRunTime.getSeconds()));
         }
     }
 
