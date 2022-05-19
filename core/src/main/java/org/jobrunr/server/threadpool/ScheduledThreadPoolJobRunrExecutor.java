@@ -17,7 +17,7 @@ public class ScheduledThreadPoolJobRunrExecutor extends java.util.concurrent.Sch
 
     public ScheduledThreadPoolJobRunrExecutor(int corePoolSize, String threadNamePrefix) {
         super(corePoolSize + 1, new NamedThreadFactory(threadNamePrefix));
-        setMaximumPoolSize(corePoolSize * 2 + 2);
+        setMaximumPoolSize((corePoolSize + 1) * 2);
         setKeepAliveTime(1, TimeUnit.MINUTES);
         antiDriftScheduler = new AntiDriftScheduler(this);
         super.scheduleAtFixedRate(antiDriftScheduler, 0, 250, TimeUnit.MILLISECONDS);
@@ -40,11 +40,14 @@ public class ScheduledThreadPoolJobRunrExecutor extends java.util.concurrent.Sch
     @Override
     public void start() {
         this.prestartAllCoreThreads();
-        LOGGER.info("ThreadManager of type 'ScheduledThreadPool' started");
+        LOGGER.info("ThreadManager of type 'ScheduledThreadPoolJobRunrExecutor' started");
     }
 
     @Override
     public void stop() {
+        LOGGER.info("Shutting down ScheduledThreadPoolJobRunrExecutor");
+        this.antiDriftScheduler.stop();
+        this.getQueue().clear();
         shutdown();
         try {
             if (!awaitTermination(10, TimeUnit.SECONDS)) {
@@ -70,11 +73,8 @@ public class ScheduledThreadPoolJobRunrExecutor extends java.util.concurrent.Sch
         public Thread newThread(Runnable runnable) {
             Thread thread = threadFactory.newThread(runnable);
             thread.setName(thread.getName().replace("pool", poolName));
+            thread.setDaemon(true);
             return thread;
         }
     }
-
-
-
-
 }

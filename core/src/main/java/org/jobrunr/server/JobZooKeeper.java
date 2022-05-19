@@ -6,6 +6,7 @@ import org.jobrunr.jobs.Job;
 import org.jobrunr.jobs.RecurringJob;
 import org.jobrunr.jobs.filters.JobFilterUtils;
 import org.jobrunr.jobs.states.StateName;
+import org.jobrunr.server.ZooKeeperRunManager.RunTracker;
 import org.jobrunr.server.concurrent.ConcurrentJobModificationResolver;
 import org.jobrunr.server.concurrent.UnresolvableConcurrentJobModificationException;
 import org.jobrunr.server.dashboard.DashboardNotificationManager;
@@ -40,10 +41,11 @@ import static org.jobrunr.storage.PageRequest.ascOnUpdatedAt;
 
 public class JobZooKeeper implements Runnable {
 
-    static final Logger LOGGER = LoggerFactory.getLogger(JobZooKeeper.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(JobZooKeeper.class);
 
     private final BackgroundJobServer backgroundJobServer;
     private final StorageProvider storageProvider;
+    private final ZooKeeperRunManager zooKeeperRunManager;
     private final List<RecurringJob> recurringJobs;
     private final DashboardNotificationManager dashboardNotificationManager;
     private final JobFilterUtils jobFilterUtils;
@@ -55,12 +57,11 @@ public class JobZooKeeper implements Runnable {
     private final AtomicInteger occupiedWorkers;
     private final Duration durationPollIntervalTimeBox;
     private Instant runStartTime;
-    private Instant firstRunStartTime;
-    private long runCounter;
 
     public JobZooKeeper(BackgroundJobServer backgroundJobServer) {
         this.backgroundJobServer = backgroundJobServer;
         this.storageProvider = backgroundJobServer.getStorageProvider();
+        this.zooKeeperRunManager = new ZooKeeperRunManager(backgroundJobServer, LOGGER);
         this.recurringJobs = new ArrayList<>();
         this.workDistributionStrategy = backgroundJobServer.getWorkDistributionStrategy();
         this.dashboardNotificationManager = backgroundJobServer.getDashboardNotificationManager();
@@ -75,15 +76,11 @@ public class JobZooKeeper implements Runnable {
 
     @Override
     public void run() {
-        try {
-            if(firstRunStartTime == null) firstRunStartTime = Instant.now();
-            runStartTime = Instant.now();
-            Instant calculatedIdealNow = firstRunStartTime.plus(Duration.ofSeconds(runCounter * backgroundJobServerStatus().getPollIntervalInSeconds()));
-            LOGGER.info("TimeDrift: runCounter: {}, runStartTime: {}, idealRunStartTime: {}, drift: {}", runCounter, runStartTime, calculatedIdealNow, Duration.between(runStartTime, calculatedIdealNow).toMillis());
-            runCounter++;
+        if (backgroundJobServer.isUnAnnounced()) return;
+        if (zooKeeperRunManager.isPreviousRunNotFinished()) return;
 
-            if (backgroundJobServer.isUnAnnounced()) return;
-
+        try (RunTracker tracker = zooKeeperRunManager.startRun()) {
+            this.runStartTime = tracker.getRunStartTime();
             updateJobsThatAreBeingProcessed();
             runMasterTasksIfCurrentServerIsMaster();
             onboardNewWorkIfPossible();
@@ -96,6 +93,8 @@ public class JobZooKeeper implements Runnable {
                 LOGGER.error("FATAL - JobRunr encountered too many processing exceptions. Shutting down.", shouldNotHappenException(e));
                 backgroundJobServer.stop();
             }
+        } finally {
+            this.runStartTime = null;
         }
     }
 
@@ -166,10 +165,9 @@ public class JobZooKeeper implements Runnable {
     }
 
     private void showWarningIfPollIntervalInSecondsTimeBoxIsPassed() {
-        final Duration durationRunTime = Duration.between(runStartTime, now());
-        final boolean runTimeBoxIsPassed = durationRunTime.compareTo(durationPollIntervalTimeBox) >= 0;
-        if(runTimeBoxIsPassed) {
-            dashboardNotificationManager.notify(new PollIntervalInSecondsTimeBoxIsTooSmallNotification(durationRunTime.getSeconds()));
+        if(pollIntervalInSecondsTimeBoxIsAboutToPass()) {
+            LOGGER.warn("JobRunr is passing the poll interval in seconds time-box. This means your poll interval in seconds setting is too small.");
+            dashboardNotificationManager.notify(new PollIntervalInSecondsTimeBoxIsTooSmallNotification((long)backgroundJobServerStatus().getPollIntervalInSeconds()));
         }
     }
 
@@ -196,7 +194,7 @@ public class JobZooKeeper implements Runnable {
                 .filter(this::mustSchedule)
                 .map(RecurringJob::toScheduledJob)
                 .collect(toList());
-        if(!jobsToSchedule.isEmpty()) {
+        if (!jobsToSchedule.isEmpty()) {
             storageProvider.save(jobsToSchedule);
         }
     }
@@ -281,15 +279,11 @@ public class JobZooKeeper implements Runnable {
 
     private boolean pollIntervalInSecondsTimeBoxIsAboutToPass() {
         final Duration durationRunTime = Duration.between(runStartTime, now());
-        final boolean runTimeBoxIsPassed = durationRunTime.compareTo(durationPollIntervalTimeBox) >= 0;
-        if (runTimeBoxIsPassed) {
-            LOGGER.debug("JobRunr is passing the poll interval in seconds timebox because of too many tasks.");
-        }
-        return runTimeBoxIsPassed;
+        return durationRunTime.compareTo(durationPollIntervalTimeBox) >= 0;
     }
 
     private List<RecurringJob> getRecurringJobs() {
-        if(this.recurringJobs.size() != storageProvider.countRecurringJobs()) {
+        if (this.recurringJobs.size() != storageProvider.countRecurringJobs()) {
             this.recurringJobs.clear();
             this.recurringJobs.addAll(storageProvider.getRecurringJobs());
         }

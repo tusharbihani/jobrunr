@@ -3,16 +3,22 @@ package org.jobrunr.server.threadpool;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ScheduledFuture;
 
 class AntiDriftScheduler implements Runnable {
 
-    private final ScheduledThreadPoolJobRunrExecutor executor;
+    private final JobRunrExecutor executor;
     private final List<AntiDriftSchedule> antiDriftSchedules;
 
-    public AntiDriftScheduler(ScheduledThreadPoolJobRunrExecutor executor) {
+    private final Map<AntiDriftSchedule, ScheduledFuture> scheduledTasks;
+
+    public AntiDriftScheduler(JobRunrExecutor executor) {
         this.executor = executor;
         this.antiDriftSchedules = new CopyOnWriteArrayList<>();
+        this.scheduledTasks = new ConcurrentHashMap<>();
     }
 
     public void addSchedule(AntiDriftSchedule antiDriftSchedule) {
@@ -27,9 +33,14 @@ class AntiDriftScheduler implements Runnable {
                 .forEach(this::schedule);
     }
 
+    public void stop() {
+        scheduledTasks.values().forEach(sf -> sf.cancel(false));
+        scheduledTasks.clear();
+    }
+
     private void schedule(AntiDriftSchedule antiDriftSchedule) {
         Instant nextSchedule = antiDriftSchedule.getNextSchedule();
         Duration duration = Duration.between(Instant.now(), nextSchedule);
-        executor.schedule(antiDriftSchedule.getRunnable(), duration);
+        scheduledTasks.put(antiDriftSchedule, executor.schedule(antiDriftSchedule.getRunnable(), duration));
     }
 }

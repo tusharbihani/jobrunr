@@ -26,8 +26,6 @@ import java.util.List;
 import java.util.ServiceLoader;
 import java.util.Spliterator;
 import java.util.UUID;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static java.lang.Integer.compare;
@@ -268,8 +266,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
     }
 
     private void stopWorkers() {
-        if (jobExecutor == null) return;
-        jobExecutor.stop();
+        stop(jobExecutor);
         this.jobExecutor = null;
     }
 
@@ -294,18 +291,9 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         );
     }
 
-    private void stop(ScheduledExecutorService executorService) {
+    private void stop(JobRunrExecutor executorService) {
         if (executorService == null) return;
-        executorService.shutdown();
-        try {
-            if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
-                LOGGER.info("JobRunr BackgroundJobServer shutdown requested - waiting for jobs to finish (at most 10 seconds)");
-                executorService.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
+        executorService.stop();
     }
 
     private ServerZooKeeper createServerZooKeeper() {
